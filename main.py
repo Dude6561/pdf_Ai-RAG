@@ -1,41 +1,30 @@
-import os
+from concurrent.futures import ThreadPoolExecutor
 
-from dotenv import load_dotenv
-from fastapi import FastAPI
-from google import genai
+from fastapi import FastAPI, File, UploadFile
 from pydantic import BaseModel
 
-from data import documents
-from vector_store import add_document, query_document
+from vector_store import add_document, extract_pdfText, generate_gemini, query_document
 
 app = FastAPI()
-
-load_dotenv()
-key = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=key)
+executor = ThreadPoolExecutor(max_workers=3)
 
 
 class Query(BaseModel):
     question: str
 
 
-@app.post("/ask")
-async def ask_question(query: Query):
-    response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=query.question
-    )
-    print(response.text)
+# @app.on_event("startup")
+# def load_data():
+#     add_document(documents)
 
 
-@app.on_event("startup")
-def load_data():
-    add_document(documents)
+@app.post("/search")
+async def search_docs(q: str, pdf_file: UploadFile = File(...)):
+    text = extract_pdfText(pdf_file)
+    add_document(text)  # added the document text to vectordb
 
-
-@app.get("/search")
-def search_docs(q: str):
     result = query_document(q)
     context_text = "\n".join(result)
     prompt = f"""Answer the question using only this context:{context_text} Question: {q}If the context doesn't have the answer, say "I don't know".Answer:"""
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    response = await generate_gemini(prompt)
     return {"question": q, "answer": response.text, "context": result}
